@@ -1,0 +1,552 @@
+{
+  "name": "SALAAR2",
+  "nodes": [
+    {
+      "parameters": {
+        "formTitle": "Upload CSV for EDA",
+        "formDescription": "Upload your dataset to generate a full EDA report with charts, insights, and PDF output.\n",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "file",
+              "fieldType": "file",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "user_email",
+              "requiredField": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.3,
+      "position": [
+        0,
+        0
+      ],
+      "id": "edf1d4ff-e1d5-418c-a2d6-98a891d42477",
+      "name": "On form submission",
+      "webhookId": "2af7bf37-c1ae-40e3-8f0a-b487a64fb50f"
+    },
+    {
+      "parameters": {
+        "binaryPropertyName": "file",
+        "options": {
+          "delimiter": ",",
+          "headerRow": true
+        }
+      },
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1.1,
+      "position": [
+        176,
+        0
+      ],
+      "id": "cdf9db62-5ede-4360-8c60-119aec4fbc7a",
+      "name": "Upload CSV"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Robust EDA builder for n8n — returns profiles_summary + sampleRows\nconst rows = items.map(i => i.json || {});\nif (rows.length === 0) {\n  return [{ json: { error: \"Empty dataset - no rows produced by CSV node\" } }];\n}\n\n// sanitize header keys (remove BOM + trim)\nconst sanitizeKey = k => String(k || \"\").replace(/^\\uFEFF/, \"\").trim();\nconst rawCols = Object.keys(rows[0]);\nconst cols = rawCols.map(sanitizeKey);\n\n// rebuild rows with sanitized keys\nconst normalized = rows.map(r => {\n  const out = {};\n  rawCols.forEach((rk, idx) => { out[cols[idx]] = r[rk]; });\n  return out;\n});\n\nconst isNumberLike = v => v !== null && v !== undefined && v !== \"\" && !isNaN(Number(String(v).replace(/,/g, \"\")));\nconst median = arr => { const a = arr.slice().sort((x,y)=>x-y); if(!a.length) return null; const m=Math.floor(a.length/2); return a.length%2 ? a[m] : (a[m-1]+a[m])/2; };\n\nconst profiles = cols.map(col => {\n  const valsRaw = normalized.map(r => {\n    const v = r[col]; if (v === undefined || v === null || String(v).trim()===\"\") return null; return String(v).trim();\n  }).filter(v => v !== null);\n  const missingCount = normalized.length - valsRaw.length;\n  const uniqueCount = new Set(valsRaw).size;\n  const numericVals = valsRaw.filter(isNumberLike).map(v => Number(String(v).replace(/,/g,\"\")));\n  const inferredType = (numericVals.length / Math.max(1, valsRaw.length)) > 0.7 ? \"numeric\" : \"categorical\";\n  const p = { columnName: col, totalCount: normalized.length, missingCount, missingPct: Number(((missingCount/normalized.length)*100).toFixed(2)), uniqueCount, sampleValues: valsRaw.slice(0,5), inferredType };\n\n  if (inferredType === \"numeric\") {\n    const n = numericVals.length;\n    const sum = n ? numericVals.reduce((a,b)=>a+b,0) : 0;\n    const mean = n ? sum / n : null;\n    const med = median(numericVals);\n    const variance = n ? numericVals.reduce((s,x)=>s+Math.pow(x-mean,2),0)/n : null;\n    const std = variance !== null ? Math.sqrt(variance) : null;\n    p.stats = { count: n, sum: n ? Number(sum.toFixed(4)) : null, mean: mean !== null ? Number(mean.toFixed(4)) : null, median: med !== null ? Number(med.toFixed(4)) : null, std: std !== null ? Number(std.toFixed(4)) : null, min: n ? Math.min(...numericVals) : null, max: n ? Math.max(...numericVals) : null };\n  } else {\n    const freq = {};\n    for (const v of valsRaw) freq[v] = (freq[v] || 0) + 1;\n    p.topValues = Object.entries(freq).sort((a,b)=>b[1]-a[1]).slice(0,5).map(([val,count])=>({val,count}));\n  }\n  return p;\n});\n\n// trimmed summary to send to Gemini (keeps payload small)\nconst profiles_summary = profiles.map(p => ({ columnName: p.columnName, inferredType: p.inferredType, missingPct: p.missingPct, uniqueCount: p.uniqueCount, stats: p.stats ? p.stats : null, topValues: p.topValues ? p.topValues : null }));\n\nreturn [{ json: { datasetName: $json.datasetName || $json.fileName || \"Uploaded Dataset\", rowCount: normalized.length, columnCount: cols.length, profiles, profiles_summary, sampleRows: normalized.slice(0,5) } }];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        368,
+        0
+      ],
+      "id": "80849708-9943-461b-8ea4-0e3dc398f712",
+      "name": "Run EDA (JS)"
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "models/gemini-2.5-pro",
+          "mode": "list",
+          "cachedResultName": "models/gemini-2.5-pro"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "You are an elite Senior Data Scientist + Research Writer + Business Strategist.  \nYou create ultra-premium, 15–20 page analytical reports that look like McKinsey / Deloitte / EY research publications combined with modern UI/UX web design aesthetics.\n\nYour job:  \nGenerate a visually attractive, highly detailed, professionally styled, full-page multi-section HTML report that fills every page completely–no empty spaces, no gaps, no short sections.\n\n==================================================\n        🔥 ABSOLUTE CONTENT REQUIREMENTS\n==================================================\n\nYour report MUST be the longest, most comprehensive output possible (15–20 pages equivalent).  \nEvery section should be loaded with deep insights, narrative, explanations, descriptions, and interpretations.  \nYour writing should be attractive, engaging, and visually inspiring.\n\nYou MUST include:\n\n1. ⭐ Title Page (with visual elements)\n   - Use symbols like 📊, 📈, 🧠, 🌐, 🔍\n   - Full-width centered layout\n   - Subtitle, author, version, date\n   - Introduction paragraph filling the rest of the page\n\n2. ⭐ Table of Contents (auto-generated)\n   - Numbered sections\n   - Icons\n   - Clean formatting\n\n3. ⭐ Executive Summary (2 FULL pages)\n   - Highlights 🌟\n   - Risks ⚠\n   - Opportunities 🚀\n   - Key observations 📌\n   - Trends\n   - Interpretations\n   - Strategic implications\n\n4. ⭐ Dataset Overview (1 FULL page)\n   - Purpose\n   - Structure description\n   - Metrics table (rows, columns, richness score, completeness score)\n   - Explanation paragraphs\n\n5. ⭐ Column-by-Column Profiling (4–5 pages)\n   - Column name 🔤\n   - Type 📘\n   - Missing % 📉\n   - Range 🔢\n   - Statistical profile 📊\n   - Interpretation paragraphs 🔍\n   - ML usefulness 🧠\n   - Why it matters 🧩\n   - ASCII bar histograms\n   - Multi-paragraph explanation\n\n6. ⭐ Advanced Statistical Insights (1–2 pages)\n   - Variance\n   - Standard deviation\n   - Skewness\n   - Kurtosis\n   - Outlier detection\n   - Mathematical meaning\n   - “What this tells us” narrative\n\n7. ⭐ Deep Relationship Insights (2 pages)\n   - Correlations\n   - Multi-variable patterns\n   - Cause-effect style reasoning\n   - ASCII correlation matrix\n   - Behavioral interpretations\n\n8. ⭐ Group-by Aggregations (1 page)\n   - Identify categorical columns\n   - Group summaries\n   - Comparative insights\n   - Segmentation patterns\n\n9. ⭐ Domain-Specific Insights (1–2 pages)\n   - Auto-detect dataset domain\n   - Education, Finance, Healthcare, Retail, Ecommerce, HR, Marketing, Risk\n   - Deep domain narratives and use cases\n\n10. ⭐ Machine Learning Insights (1–2 pages)\n    - Potential target variables\n    - Best features\n    - Feature engineering\n    - Bias and imbalance\n    - Recommended ML models\n    - ML readiness score\n    - Workflow recommendations\n\n11. ⭐ Business Insights & Implications (1–2 pages)\n    - Opportunities\n    - Strategic decisions\n    - Market insights\n    - Leadership insights\n    - Forecast-like narrative\n\n12. ⭐ Data Quality Review (Full page)\n    - Missingness patterns\n    - Noise\n    - Outliers\n    - Consistency issues\n    - Readiness score\n    - Fix steps\n\n13. ⭐ Recommendations (1+ page)\n    - For data\n    - For ML\n    - For business\n    - For strategy\n    - For leadership\n\n14. ⭐ Appendix (1–2 pages)\n    - 10–20 sample rows\n    - Clean tables\n    - Notes\n\n==================================================\n        🔥 DESIGN & AESTHETIC REQUIREMENTS\n==================================================\n\nYour HTML must be visually premium, modern, and highly readable.\n\nInclude:\n- A4 @page layout (22mm top/bottom, 18mm sides)\n- Attractive color highlights\n- Elegant tables\n- Icons on every heading\n- Dividers\n- Section markers\n- Page breaks using `.page-break`\n- Perfect readability with 12.5–13px body font\n- FULL CSS in <style>\n\n==================================================\n        🎨 ADVANCED VISUAL & STYLING RULES\n==================================================\n\nYou MUST enhance the visual appeal of the report:\n\n- Use **clean borders** around key sections, tables, and highlighted content  \n- Add **soft coloured background boxes** for important statements  \n- Use **multiple accent colours** (premium blues, slate greys, subtle golds, teal highlights)\n- Headings must have **colour bars, left borders, or top borders** for visual hierarchy\n- Use **section separators** using borders or subtle shaded dividers\n- Use **highlight boxes** to show:\n  • Key insights  \n  • Important warnings  \n  • Opportunities  \n  • Recommendations  \n\n- Important statements MUST be highlighted using:\n  • Background color (#f7faff, #fff4d6, #e8fde8)  \n  • Bold weight  \n  • Icons for emphasis  \n  • Soft border around the box  \n\n- Tables MUST include:\n  • Header row with a coloured background  \n  • Alternating row shading (very subtle)  \n  • Rounded corners (border-radius: 4px)  \n  • Soft border (#d0d6dd)\n\n- Visual tone MUST be professional, premium, and publication-grade, with:\n  • Vibrant but not harsh colours  \n  • Consistent theme across all pages  \n  • Balanced spacing around highlighted content  \n\n- Every page must feel visually rich and aesthetically pleasing.\n\n==================================================\n        🔥 HTML OUTPUT REQUIREMENTS\n==================================================\n\nOutput ONLY:\n<!doctype html>\n<html>\n<head>\n<style>\n(FULL CSS HERE)\n</style>\n</head>\n<body>\n<div class=\"container\">\n(CONTENT HERE)\n</div>\n</body>\n</html>\n\nNo markdown.  \nNo backticks.  \nNo placeholders.  \nFull HTML only.\n\n==================================================\n        🔒 NO OVERFLOW + NO PAGE LIMIT RULES\n==================================================\n\nADD THESE RULES:\n\n- Never restrict number of pages — allow unlimited page expansion  \n- Never compress content to fit into 15–20 pages  \n- NO overflow under any circumstances  \n- NO clipped or cut text  \n- NO overlapping elements  \n- NO fixed-height containers  \n- NO absolute/fixed positioning  \n- NO floating elements  \n- NO multi-column layouts  \n- Content must flow naturally across pages  \n- Tables must be 100% fluid  \n- Paragraphs must wrap naturally  \n- Page breaks must use `.page-break`  \n- All content must be fully visible in the final PDF  \n\n==================================================\n\nWrite beautifully, engagingly, and with narrative depth.  \nUse icons.  \nFill every page.  \nMake it visually stunning and professional.\n",
+              "role": "model"
+            },
+            {
+              "content": "=Generate the complete HTML report described in the system prompt.  \nFill every page completely with high-quality analytical content, narrative insights, \nprofessional design, icons, deep statistical reasoning, ML interpretation, \nand domain-specific insights.\n\n⚠ NEW RULES:\n- Do NOT restrict the number of pages.  \n- Use as many pages as needed for full, natural flow.  \n- Avoid ALL overflow, clipped text, overlapping elements, and fixed-height blocks.  \n- Let the content expand vertically without limitation.\n\nUse the following data:\n\n### 1. Full dataset (array of rows):\n{{ JSON.stringify($input.all(), null, 2) }}\n\n### 2. EDA summary from \"Run EDA (JS)\":\n{{ JSON.stringify($items(\"Run EDA (JS)\"), null, 2) }}\n\n### 3. Column Names:\n{{ JSON.stringify(Object.keys($input.first().json), null, 2) }}\n\nProduce:\n- A complete multi-page HTML document  \n- With embedded full CSS  \n- Zero markdown  \n- Zero backticks  \n- Fully styled  \n- Highly attractive  \n- Overflow-free  \n- Page-limit-free  \n\nAlso ensure:\n- Add borders to important sections  \n- Make the report visually colourful with elegant accent colours  \n- Highlight all important insights using coloured boxes, icons, and borders  \n- Use premium modern design elements across all sections  \n- Do NOT use dull/plain layouts — make every page visually attractive and engaging  \n"
+            }
+          ]
+        },
+        "options": {
+          "maxOutputTokens": 40000,
+          "temperature": 0.2
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.googleGemini",
+      "typeVersion": 1,
+      "position": [
+        560,
+        0
+      ],
+      "id": "b8dbd4d3-d371-4614-915c-4d57d6920fa1",
+      "name": "Message a model",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "MFFzez5Nr7nzoTPq",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "html_content": "={{$json.html_report}}\n"
+      },
+      "type": "n8n-nodes-htmlcsstopdf.htmlcsstopdf",
+      "typeVersion": 1,
+      "position": [
+        1056,
+        0
+      ],
+      "id": "ff1c0cb3-ce0e-4c82-805c-3432862a8409",
+      "name": "HTML to PDF",
+      "credentials": {
+        "htmlcsstopdfApi": {
+          "id": "7iIXb5StrDrvdc4M",
+          "name": "HTML to PDF account 4"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ \n  ($json.user_email ?? \"\").match(/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/) \n    ? $json.user_email \n    : \"fallback@gmail.com\" \n}}\n",
+        "subject": "=EDA Report — {{ $json.datasetName || ($json.file && $json.file[0] && $json.file[0].filename) || 'Uploaded Dataset' }}\n\n",
+        "message": "=Hello,<br/><br/>\nYour EDA report for <strong>{{ $json.file[0].filename || ($json.datasetName || 'the dataset') }}</strong> is attached.<br/><br/>\nUploaded at: {{ $json.submittedAt }}<br/>\nIf you do not receive the attachment, please check spam or contact admin.<br/><br/>\nRegards,<br/>AI Workflow\n",
+        "options": {
+          "attachmentsUi": {
+            "attachmentsBinary": [
+              {}
+            ]
+          }
+        }
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        1648,
+        0
+      ],
+      "id": "ef7509f6-76df-4a27-a8bc-9f88a4000644",
+      "name": "Send a message",
+      "webhookId": "71299938-be35-4708-a6ab-425178398fc0",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "FFYWEeCQ6PR9alg2",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.pdf_url }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        1264,
+        0
+      ],
+      "id": "412f13ec-e97a-4187-ad6a-56707b1eabd3",
+      "name": "Download PDF"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Try common Gemini locations\nconst raw =\n  $json.text ||\n  ($json.candidates && $json.candidates[0] && $json.candidates[0].content && $json.candidates[0].content.parts && $json.candidates[0].content.parts[0] && $json.candidates[0].content.parts[0].text) ||\n  ($json.content && $json.content.parts && $json.content.parts[0] && $json.content.parts[0].text) ||\n  ($json.outputText) ||\n  \"\";\n\n// Fallback: if entire item has an 'output' field\nif(!raw && $json.output && typeof $json.output === 'string') raw = $json.output;\n\nif(!raw) {\n  return [{ json: { error: \"No text found in Gemini output\", debug: $json } }];\n}\n\n// remove triple backticks ```html or ```\nlet html = String(raw).trim();\nhtml = html.replace(/^\\s*```(?:\\s*html)?\\s*/i, '').replace(/\\s*```\\s*$/i, '');\nhtml = html.replace(/^\\s*~~~(?:\\s*html)?\\s*/i, '').replace(/\\s*~~~\\s*$/i, '');\n\n// ensure starts with <!doctype or <html>\nconst idx = html.toLowerCase().indexOf('<!doctype');\nif(idx > 0) html = html.slice(idx);\nif(html.toLowerCase().indexOf('<!doctype') === -1 && html.toLowerCase().indexOf('<html') === -1) {\n  // not full html — wrap simple body\n  html = \"<!doctype html><html><head><meta charset='utf-8'><title>EDA Report</title></head><body>\" + html + \"</body></html>\";\n}\n\n// ensure page-break CSS exists (inject small CSS if missing)\nif(html.indexOf('@page') === -1) {\n  const inject = `<style>@page{size:A4;margin:20mm}.page-break{page-break-after:always}</style>`;\n  html = html.replace(/<head>/i, '<head>' + inject);\n}\n\n// Return html_report and binary data (base64)\nreturn [{\n  json: { html_report: html },\n  binary: {\n    data: {\n      data: Buffer.from(html, 'utf8').toString('base64'),\n      mimeType: 'text/html',\n      fileName: 'report.html'\n    }\n  }\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        0
+      ],
+      "id": "c81df329-22c1-42ca-991a-facdb7afb2d3",
+      "name": "html Report"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Your form trigger node name\nconst FORM_NODE = \"On form submission\";\n\nlet original = {};\ntry {\n  original = $items(FORM_NODE)[0].json;\n} catch (e) {\n  original = {};\n}\n\nconst current = $json || {};\n\nconst user_email =\n  current.user_email ||\n  original.user_email ||\n  null;\n\nreturn [{\n  json: { \n    ...current, \n    user_email \n  },\n  binary: $binary\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1456,
+        0
+      ],
+      "id": "cd895824-80a0-4d4b-bcb9-55ea79f9b22b",
+      "name": "Ensure Email Present"
+    },
+    {
+      "parameters": {
+        "url": "={{$node[\"Generate PDF from HTML\"].json[\"pdf_url\"]}}\n",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        1584,
+        320
+      ],
+      "id": "78876e88-4587-4518-b651-ef70966a1888",
+      "name": "Download PDF File"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "485abfc0-263a-4dc7-98d2-777591ec8790",
+              "name": "html",
+              "value": "={{$node[\"Message a model1\"].json[\"content\"][\"parts\"][1][\"text\"]}}\n\n\n",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        976,
+        352
+      ],
+      "id": "847a8d8b-50c3-4784-88c8-1942a9c6163e",
+      "name": "Extract HTML (Edit Fields)"
+    },
+    {
+      "parameters": {
+        "html_content": "={{$node[\"Extract HTML (Edit Fields)\"].json[\"html\"]}}"
+      },
+      "type": "n8n-nodes-htmlcsstopdf.htmlcsstopdf",
+      "typeVersion": 1,
+      "position": [
+        1392,
+        320
+      ],
+      "id": "d851c908-aa06-4dac-a363-b5b0ab1d2cc8",
+      "name": "Generate PDF from HTML",
+      "credentials": {
+        "htmlcsstopdfApi": {
+          "id": "7iIXb5StrDrvdc4M",
+          "name": "HTML to PDF account 4"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sendTo": "={{$node[\"On form submission\"].json[\"user_email\"]}}",
+        "subject": "Hello,  Here is your automatically generated PDF EDA Report.",
+        "message": "=Hi,\n\nHere is your automatically generated EDA PDF report.  \nPlease check the attachment.\n\nThanks,\nYour analytics bot\n",
+        "options": {
+          "attachmentsUi": {
+            "attachmentsBinary": [
+              {}
+            ]
+          }
+        }
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        1760,
+        320
+      ],
+      "id": "ef26be63-eb15-4d78-867f-1165c9c48abe",
+      "name": "Send a message1",
+      "webhookId": "d22348d9-20b5-4e92-8eff-9e42c99bd9d8",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "FFYWEeCQ6PR9alg2",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "binaryPropertyName": "file",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1.1,
+      "position": [
+        160,
+        208
+      ],
+      "id": "aff7ed04-69c8-470a-afb1-2f9a7f75271e",
+      "name": "Extract from File"
+    },
+    {
+      "parameters": {
+        "jsCode": "// \"items\" is an array of rows from Extract from CSV\nconst rows = items.map(i => i.json);\n\n// Make a single big JSON string\nconst dataJson = JSON.stringify(rows);\n\n// Return a single item with one field: data_json\nreturn [\n  {\n    json: {\n      data_json: dataJson\n    }\n  }\n];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        400,
+        208
+      ],
+      "id": "dd424116-4990-4aff-ab2c-57e9397edd59",
+      "name": "Combine rows to JSON"
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "models/gemini-2.5-pro",
+          "mode": "list",
+          "cachedResultName": "models/gemini-2.5-pro"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "=You are given cleaned tabular data in JSON format.\n\nYour task:\nCreate EXACTLY 15 charts that show the strongest, clearest, and most meaningful insights in the dataset. These charts should reveal important statistical patterns, relationships, trends, distributions, and category differences.\n\nChart Requirements:\n- Use a mix of chart types: histograms, bar charts, scatter plots, line charts, box plots, and correlation-focused visuals.\n- Use attractive, readable colors that look professional in a PDF.\n- Each chart must be represented using INLINE SVG (no external resources).\n- Each chart must include a figcaption of ~10 lines describing:\n  • what the chart shows  \n  • the key trend  \n  • why the pattern matters  \n  • how it relates to the rest of the dataset  \n  • any interesting observations or anomalies\n\nHTML Structure:\n<!DOCTYPE html>\n<html>\n<head>\n<title>Top 15 Data Insights – Visual Analytics Report</title>\n<style>\nbody { font-family: Arial, sans-serif; padding: 30px; background: #fafafa; color: #222; }\nh1 { text-align: center; margin-bottom: 40px; }\n.chart { margin: 45px 0; text-align: center; }\nfigcaption { font-size: 0.95rem; line-height: 1.5; margin-top: 15px; color: #444; max-width: 800px; margin-left: auto; margin-right: auto; }\nsvg { max-width: 100%; border: 1px solid #ddd; background: #fff; padding: 10px; }\n</style>\n</head>\n<body>\n<h1>Top 15 Data Insights – Visual Analytics Report</h1>\n\n<!-- Insert exactly 15 chart <figure> sections -->\n\n</body>\n</html>\n\nNow generate the complete HTML report using the rules above.\n\nHere is the cleaned dataset JSON:\n{{ $json[\"data_json\"] }}\n"
+            },
+            {
+              "content": "=You are an expert data visualization generator. Your only job is to analyze cleaned tabular data and generate a single, well-designed HTML report that contains exactly 15 charts, each with a clear and easy-to-understand insight explanation.\n\nSTRICT OUTPUT RULES:\n- Output ONLY raw HTML (NO Markdown, NO code fences, NO backticks).\n- HTML must begin with <!DOCTYPE html> and end with </html>.\n- Use embedded <style> for clean, modern, attractive design.\n- Use rich, readable colors in charts (e.g., blues, greens, purples).\n- All charts must be INLINE SVG with no external images, JS, or links.\n- Structure each visual inside:\n  <figure class=\"chart\">\n      <svg>…</svg>\n      <figcaption>10-line descriptive insight.</figcaption>\n  </figure>\n- Every chart must convey a meaningful statistical insight.\n- Descriptions must be ~10 lines long, clear, deeply meaningful, and easy to understand.\n- Use consistent color palettes across charts.\n- The report must contain exactly 15 charts—no more, no less.\n- Do not generate any text outside the HTML output.\n",
+              "role": "model"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.googleGemini",
+      "typeVersion": 1,
+      "position": [
+        608,
+        352
+      ],
+      "id": "d086cdf6-257b-455b-827a-279edc9cb4c2",
+      "name": "Message a model1",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "MFFzez5Nr7nzoTPq",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "toText",
+        "sourceProperty": "html",
+        "options": {
+          "fileName": "report.html"
+        }
+      },
+      "type": "n8n-nodes-base.convertToFile",
+      "typeVersion": 1.1,
+      "position": [
+        1184,
+        352
+      ],
+      "id": "29e5e817-229d-483c-a0aa-4c053e2640fc",
+      "name": "Convert to File"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "On form submission": {
+      "main": [
+        [
+          {
+            "node": "Upload CSV",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Extract from File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upload CSV": {
+      "main": [
+        [
+          {
+            "node": "Run EDA (JS)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run EDA (JS)": {
+      "main": [
+        [
+          {
+            "node": "Message a model",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Message a model": {
+      "main": [
+        [
+          {
+            "node": "html Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTML to PDF": {
+      "main": [
+        [
+          {
+            "node": "Download PDF",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download PDF": {
+      "main": [
+        [
+          {
+            "node": "Ensure Email Present",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "html Report": {
+      "main": [
+        [
+          {
+            "node": "HTML to PDF",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ensure Email Present": {
+      "main": [
+        [
+          {
+            "node": "Send a message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract HTML (Edit Fields)": {
+      "main": [
+        [
+          {
+            "node": "Convert to File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate PDF from HTML": {
+      "main": [
+        [
+          {
+            "node": "Download PDF File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download PDF File": {
+      "main": [
+        [
+          {
+            "node": "Send a message1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract from File": {
+      "main": [
+        [
+          {
+            "node": "Combine rows to JSON",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Combine rows to JSON": {
+      "main": [
+        [
+          {
+            "node": "Message a model1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Message a model1": {
+      "main": [
+        [
+          {
+            "node": "Extract HTML (Edit Fields)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Convert to File": {
+      "main": [
+        [
+          {
+            "node": "Generate PDF from HTML",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "8a9594fb-c8d2-45c9-be2d-723baf3889f1",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "ab2258e25a0945afb2c9c92d198afc728b9600658d6800a57aba21b9773befd2"
+  },
+  "id": "SKVecKtBXMZMPdDw",
+  "tags": []
+}
